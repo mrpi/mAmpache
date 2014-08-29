@@ -1,0 +1,1349 @@
+<html> 
+
+<head>
+  <title>mAmpache</title>
+
+  <link rel="stylesheet" href="jquery.mobile/jquery.mobile-1.4.3.min.css">
+  <link rel="stylesheet" href="jquery-ui/jquery-ui.css">
+    
+  <link type="text/css" href="mampache.css" rel="stylesheet" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no">
+    
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="mobile-web-app-capable" content="yes">
+    
+  <meta charset="utf-8">
+
+  <script type="text/javascript" src="modules/jquery/jquery.min.js"></script>
+  <script type="text/javascript" src="modules/jquery.mobile/jquery.mobile-1.4.3.min.js"></script>
+
+  <!--<script type="text/javascript" src="jPlayer/jquery.jplayer.min.js"></script>-->
+  <script type="text/javascript" src="modules/jquery-jplayer/jquery.jplayer.min.js"></script>
+  <script type="text/javascript" src="modules/jquery-jplayer/jplayer.playlist.min.js"></script>    
+  <script type="text/javascript" src="modules/jquery-jplayer/jplayer.playlist.ext.js"></script>
+
+  <script type="text/javascript" src="modules/jquery-ui/jquery-ui.js"></script>
+  <script type="text/javascript" src="modules/jquery-ui/jquery.ui.touch-punch.min.js"></script>
+    
+  <script type="text/javascript" src="modules/jquery-cookie/jquery.cookie.js"></script>
+  <script type="text/javascript" src="modules/jquery-storage/jquery.storageapi.min.js"></script>
+    
+  <script type="text/javascript">
+    $( ".selector" ).on( "pagecontainerbeforetransition", function(event, ui) { 
+        //$('<div>').attr({'data-role':'header','data-theme':'b','data-position':'fixed','data-id':'footer'}).append('<h3>Article</h3>').appendTo($(this));
+        $("#playerFooter").appendTo(ui.toPage);
+        console.log("Adding footer to page"); 
+    });  
+      
+    $(document).ready(function() {
+      console.log("Document ready() function");
+        
+      //$("#sortable-playlist").sortable();
+      //$("#sortable-playlist").sortable({items: "> .none-sortable"});
+              
+      //$("li").disableSelection();
+        
+      $.cookie.raw = true;
+      $.cookie.json = true;
+      currentSubDirs = {};
+      currentDirFiles = {};
+      prevSubDirs = {};
+      trackAddTimeoutId = null;
+      safePlaylistTimeoutId = null;
+      loginData = { ampacheUrl: location.protocol + "//" + location.hostname + "/ampache", userName: "", password: "" };
+      $("#ampacheUrlField").attr("value", loginData.ampacheUrl);
+
+      <!-- Refresh list to the end of sort to have a correct display -->
+      $( "#sortable-playlist" ).bind( "sortstop", function(event, ui) {
+        //$('#sortable-playlist').listview('refresh');
+        //console.log("item.index: " + ui.item.index());
+        //console.log("placeholder.index: " + ui.placeholder.index());
+        //console.log("helper.index: " + ui.helper.index());
+          myPlaylist.scan();
+          onPlaylistChange();
+      });
+        
+      safeCurrentTrackIdx = function(idx) {
+          $.cookie("currentTrackIdx", idx, {expires:365});
+      }
+        
+      loadCurrentTrackIdx = function() {
+          var plData = $.cookie("currentTrackIdx", Number);
+          if(plData)
+             return plData;
+          return -1;
+      }
+        
+      safePlaylist = function(pl) {
+          console.log("Saving playlist with " + pl.playlist.length + " items");
+          $.localStorage.set("playlist", JSON.stringify(pl.playlist));
+          var res = $.localStorage.get("playlist").length;
+          console.log("Saved playlist with " + res + " items");
+      }
+        
+      loadPlaylist = function() {
+          var plData = $.localStorage.get("playlist");
+          if(plData)
+             return plData;
+          return [];
+      }
+      
+      var cookiePl = loadPlaylist();
+      var currentTrackIdx = loadCurrentTrackIdx();
+        
+      myPlaylist = new jPlayerPlaylist({
+          jPlayer: "#jquery_jplayer_1",
+		  cssSelectorAncestor: "#jp_page"
+      }, cookiePl, {
+          playlistOptions: {
+              enableRemoveControls: true
+          },
+          swfPath: "jquery-jplayer/",
+          //supplied: "oga",
+          //supplied: "m4a",
+          //supplied: "mp3",
+          //supplied: "mp3, m4a",
+          //supplied: "oga, m4a",
+          supplied: "oga, m4a, mp3",
+          smoothPlayBar: true,
+          autoPlay: true,
+          keyEnabled: true,
+          audioFullScreen: true,
+          preload: "auto",
+          solution: "html"
+      });
+        
+      $("#sortable-playlist").on("click.onPlaylistChange", "a.jp-playlist-item-remove", function() { onPlaylistChange(); });
+
+      if(currentTrackIdx > -1 && currentTrackIdx < myPlaylist.playlist.length)
+          myPlaylist.select(currentTrackIdx);
+
+      $("#jquery_jplayer_1").bind($.jPlayer.event.setmedia, function(event) {
+          console.log("SetMedia event " + event.jPlayer.status.media.title + " by " + event.jPlayer.status.media.artist);
+          $("#current-artist").html( event.jPlayer.status.media.artist );
+          $("#current-title").html( event.jPlayer.status.media.title );
+          $("#current-cover").html( "<img src=\"" + event.jPlayer.status.media.poster + "\" style=\"width: 100%;\" />" );
+          safeCurrentTrackIdx(myPlaylist.current);
+                  
+          $("#current-cover :first-child").attr("style", "width: 100%;");
+      });
+        
+      $("#jquery_jplayer_1").bind($.jPlayer.event.pause, function(event) {
+          console.log("Playback paused");
+      });
+        
+      onPlaylistChange = function() {
+          console.log("In onPlaylistChange()");
+          
+          if(safePlaylistTimeoutId != null) {
+              window.clearTimeout(safePlaylistTimeoutId);
+              safePlaylistTimeoutId = null;
+          }
+          
+          safePlaylistTimeoutId = window.setTimeout( function() {
+              safePlaylist(myPlaylist);
+              safeCurrentTrackIdx(myPlaylist.current);
+          }, 800 );
+      }
+        
+      addFileToPlaylist = function(fileId, playIfPaused, mode) {
+        var file = currentDirFiles[fileId];
+          
+        var playlistItem = {
+			title:    file.title,            
+			artist:   file.artist,
+            artistId: file.artistId,
+            albumId:  file.albumId
+		};
+        //var fileUrl = loginData.ampacheUrl + "/rest/download.view" + subSonicParams() + "&id=" + file.id;
+        var fileUrl = loginData.ampacheUrl + "/rest/stream.view" + subSonicParams() + "&id=" + file.id + "&format=";
+        if( codecs.supportsMimeType(file.contentType) )
+            fileUrl += "raw";
+        else if( codecs.supportsOggOpus() )
+            fileUrl += "opus";
+        else if( codecs.supportsOggVorbis() )
+            fileUrl += "ogg";
+        else if( codecs.supportsMp3() )
+            fileUrl += "mp3";
+          
+        //if(navigator.userAgent.indexOf("Chrome") != -1 && navigator.userAgent.indexOf("Android") == -1)
+        //    fileUrl = loginData.ampacheUrl + "/rest/download.view" + subSonicParams() + "&id=" + file.id;
+          
+        //fileUrl = "003.ogg";
+          
+        //if(file.suffix == "mp3")
+           playlistItem["mp3"] = fileUrl;
+        //else if(file.suffix == "opus" || file.suffix == "ogg" || file.suffix == "oga")
+           playlistItem["oga"] = fileUrl;
+        //else
+           playlistItem["m4a"] = fileUrl;
+          
+          
+        playlistItem["poster"] = getCoverArtUrl(file.coverArt, 192);
+        playlistItem["fileId"] = fileId;
+          
+        if(mode == "now")
+            myPlaylist.removeAll();
+        else if(mode == "next")
+            console.error("<Play next> is not yet implemented!");
+          
+        myPlaylist.add(playlistItem);
+          
+        $("#sortable-playlist").children().last().attr("fileId", fileId);
+          
+        if( playIfPaused && $("#jquery_jplayer_1").data("jPlayer").status.paused ) {
+            myPlaylist.select(myPlaylist.playlist.length-1);
+            $("#jquery_jplayer_1").jPlayer("play");
+        }
+          
+        if(trackAddTimeoutId != null) {
+            window.clearTimeout(trackAddTimeoutId);
+            trackAddTimeoutId = null;
+        }
+          
+        var trackOverlay = $("#trackAddedOverlay");
+        var addCnt = Number(trackOverlay.attr("addCnt")) + 1;
+        if(addCnt == 1)
+            trackOverlay.html( addCnt + " track added to playlist" );
+        else
+            trackOverlay.html( addCnt + " tracks added to playlist" );
+        trackOverlay.attr("addCnt", addCnt);
+        var overlayPos = ($(window).width() / 2) - (trackOverlay.width() / 2);
+        trackOverlay.css("left", overlayPos);
+
+        onPlaylistChange(myPlaylist);
+          
+        $("#trackAddedOverlay").css({ "display": "inline" });
+          
+        trackAddTimeoutId = window.setTimeout( function() {
+            $("#trackAddedOverlay").fadeOut( 600, function() {
+              if(trackAddTimeoutId) {
+                $("#trackAddedOverlay").attr("addCnt", 0);
+              }
+            });
+        }, 2000);
+          
+        $("li.playlist-row").on("taphold", function(event) {
+            //$("#sortable-playlist").sortable();
+            $("#sortable-playlist").sortable({items: "> *"});
+            return true;
+        });
+          
+        //$.mobile.navigate("#playlist");
+      }
+      
+      reloadPage = function() {
+          $("#mainPagePopup").popup("close");
+          //$("#artistListPopup").popup("close");
+          window.setTimeout( function() {
+              location.reload();
+          }, 250 );
+      }
+        
+      subSonicParams = function() {
+          var res = "";
+          res += "?u=" + encodeURIComponent(loginData.userName);
+          res += "&p=" + encodeURIComponent(loginData.password);
+          res += "&f=json";
+          res += "&v=1.9.0";
+          res += "&c=mAmpache";
+          return res;
+      }
+      
+      myHashChange = function() {
+          var hashVal = location.hash.replace(/&.*/g, "");
+          console.info("Hash: " + location.hash );
+          
+          $("#mainPanel li .ui-btn-active").removeClass("ui-btn-active");
+          
+          if(hashVal == "#artistPage") {
+            $("#jp_container_1").appendTo( $("#footerArtist") );
+            $("#mainPanel").appendTo( $("#artistPage") );
+          }
+          else if(hashVal == "#albumPage") {
+            $("#jp_container_1").appendTo( $("#footerAlbum") );
+            $("#mainPanel").appendTo( $("#albumPage") );
+          }
+          else if(hashVal == "#searchPage") {
+            $("#jp_container_1").appendTo( $("#footerSearch") );
+            $("#mainPanel").appendTo( $("#searchPage") );
+          }
+          else if(hashVal == "#playlistPage") {
+            $("#jp_container_1").appendTo( $("#footerPlaylist") );
+            $("#mainPanel").appendTo( $("#playlistPage") );
+          }
+          else if(hashVal == "#artistListPage") {
+            $("#jp_container_1").appendTo( $("#footerArtistList") );
+            $("#mainPanel").appendTo( $("#artistListPage") );
+          } else {
+            $("#jp_container_1").appendTo( $("#footerMain") );
+            $("#mainPanel").appendTo( $("#mainPage") );
+          }
+          
+          if(hashVal == "#playlistPage")
+          {
+              console.info("Showing ext bar");
+              $("#ext-bar").show();
+          }
+          else
+          {
+              console.info("Hiding ext bar");
+              $("#ext-bar").hide(800);
+          }
+      };
+        
+      isEmpty = function(o) {
+          if(o == null)
+              return true;
+          
+          if(o.length > 0)
+              return false;
+          if(o.length === 0)
+              return true;
+          
+          for(var key in o)
+              return false;
+          
+          return true;
+      }
+      
+      setAlbumForPopupMenu = function(dirId) {
+          var itm = getSubDir(dirId);
+
+          if(itm)
+              $("#popupAlbumTitle").html(itm.name);
+          
+          if(itm.artistId)
+              $("#albumPopupShowAlbum").attr("onClick", "viewDirectory(" + itm.artistId + ", false);");
+
+          $("#albumPopupPlayNow").attr("onClick", "playDirectory(" + dirId + ", true); $(\"#albumPopup\").popup(\"close\");");
+          $("#albumPopupPlayLast").attr("onClick", "playDirectory(" + dirId + ", false); $(\"#albumPopup\").popup(\"close\");");
+      }
+      
+      albumContextMenuFunc = function(event) {
+          if(navigator.vibrate)
+             navigator.vibrate(15);
+          
+          event.preventDefault();
+          event.stopPropagation();
+
+          console.log("Got tap hold event");
+
+          var dirId = $(event.target).attr("dirId");
+          if(dirId == null)
+              dirId = $(event.target).parent().attr("dirId");
+          
+          if(dirId == null) {
+              console.error("albumContextMenuFunc(): target has no dirId");
+              return;
+          }
+          
+          setAlbumForPopupMenu(dirId);
+
+          $("#popupAlbumTitle").show();
+          
+          if(location.hash.substr(0, 11) == "#artistPage")
+              $("#albumPopupShowAlbum").hide();
+          else
+              $("#albumPopupShowAlbum").show();
+          
+          $("#albumPopup").popup("open");
+
+          return false;
+      };
+      
+      setTrackForPopupMenu = function(trackId) {
+          $("#trackPopupPlayNow").attr("onClick",  "addFileToPlaylist(" + trackId + ", true,  \"now\");  $(\"#trackPopup\").popup(\"close\");");
+          $("#trackPopupPlayNext").attr("onClick", "addFileToPlaylist(" + trackId + ", false, \"next\"); $(\"#trackPopup\").popup(\"close\");");
+          $("#trackPopupPlayLast").attr("onClick", "addFileToPlaylist(" + trackId + ", false, \"last\"); $(\"#trackPopup\").popup(\"close\");");
+      }
+      
+      trackContextMenuFunc = function(event) {
+          if(navigator.vibrate)
+             navigator.vibrate(15);
+          
+          event.preventDefault();
+          event.stopPropagation();
+
+          console.log("Got tap hold event");
+
+          var trackId = $(event.target).attr("trackId");
+          if(trackId == null)
+              trackId = $(event.target).parent().attr("trackId");
+          
+          if(trackId == null) {
+              console.error("trackContextMenuFunc(): target has no trackId");
+              return;
+          }
+          
+          setTrackForPopupMenu(trackId);
+
+          $("#trackPopup").popup("open");
+
+          return false;
+      };
+      
+      fileFormatString = function(itm) {
+          var res = "";
+          
+          if(itm.bitRate)
+              res += itm.bitRate + " kbps ";
+          if(itm.suffix)
+              res += itm.suffix;
+          
+          if(res.charAt(res.length-1) == ' ')
+              res = res.substr(0, res.length-1);
+          
+          if(res == "")
+              return null;
+          
+          return res;
+      }
+      
+      artistLi = function(itm) {
+          var dirLi = $("<li>").attr("dirId", itm.id);
+          $("<a href=\"#artistPage\" data-transition=\"slide\">").attr("onClick", "onDirectorySelected(" + itm.id + ", false, \"" + itm.name + "\");").html(itm.name).appendTo(dirLi);
+          return dirLi;
+      }
+      
+      albumLi = function(itm) {
+          var a = $("<a>").attr("class", "albumLink").attr("dirId", itm.id).attr("href", "#albumPage").attr("data-transition", "slide");
+          a.attr("onClick", "onDirectorySelected(" + itm.id + ", true, null);");
+
+          var coverUrl = getCoverArtUrl(itm.id, 192);
+          $("<img style=\"width: 100%;\">").attr("src", coverUrl).appendTo(a);
+
+          $("<h2>").html(itm.title).appendTo(a);
+          if(itm.artist)
+            $("<p>").html("by " + itm.artist).appendTo(a);
+
+          var li = $("<li>").attr("class", "albumLink").attr("dirId", itm.id);
+          a.appendTo(li);
+          
+          return li;
+      }
+      
+      songLi = function(itm) {
+          var caption = "";
+          if(itm.track)
+              caption = itm.track + ". ";
+          caption += itm.title;
+
+          var a = $("<a class=\"albumTrack\">").attr("onClick", "addFileToPlaylist(" + itm.id + ", true);").attr("trackId", itm.id);
+          $("<h2 style=\"margin-bottom: 3px;\">").html(caption).appendTo(a);
+          var p = $("<p style=\"margin-top: 3px; width: 100%\">");
+          var d1 = $("<div>").css("float", "left");
+          if(itm.artist)
+              d1.html("by " + itm.artist + " ");
+          var fileFormat = fileFormatString(itm);
+          if(fileFormat)
+              d1.html(d1.html() + " (" + fileFormat + ")");
+
+          d1.appendTo(p);
+
+          if(itm.duration)
+             $("<div>").attr("class", "trackRuntime").html(toHHMMSS(itm.duration)).appendTo(p);
+
+          p.appendTo(a);
+
+          return $("<li>").append(a);
+      }
+        
+      onDirectoryDataReceived = function(data, forAlbum) {
+          var list = $("#albumList");
+          var subPage = "albumPage";
+          if(forAlbum) {
+            list = $("#trackList");
+          }
+          
+          list.empty();
+          
+          currentDirFiles = {};
+          
+          if(!isEmpty(currentSubDirs))
+              prevSubDirs = currentSubDirs;
+          currentSubDirs = {};
+          
+          var childs = null;
+          if(data["subsonic-response"].directory)
+              childs = data["subsonic-response"].directory.child;
+          else {
+              setAlbumPageHeader(data["subsonic-response"].album);
+              childs = data["subsonic-response"].album.song;
+          }
+          
+          var handleChild = function(itm) {
+              if(itm.isDir)
+              {
+                  currentSubDirs[itm.id] = itm;
+                  albumLi(itm).appendTo(list);
+              }
+              else
+              {
+                  currentDirFiles[itm.id] = itm;
+                  songLi(itm).appendTo(list);
+              }
+          }
+
+          
+          if(childs.id === undefined) {
+              for(var idx in childs)
+                  handleChild(childs[idx]);
+          } else
+              handleChild(childs);
+          
+          list.listview("refresh");
+      }
+        
+      onDirectorySelected = function(dirId, forAlbum, artistName) {
+          console.info("Clicked directory: " + dirId);
+          
+          if(artistName && artistName != "")
+                $("#artistNameHeader").html(artistName);
+          
+          //$.mobile.navigate("#dir" + dirId);
+          viewDirectory(dirId, forAlbum);
+      }
+      
+      viewArtists = function() {
+          //$("#playlistView").hide();
+          //$("#directoryView").hide();
+          //$("#artistView").show();
+      }
+      
+      viewPlaylist = function() {
+          if(location.hash != "#playlistPage")
+              $.mobile.navigate("#playlistPage");
+      }
+      
+      viewartistListPage = function() {
+          if(location.hash != "#artistListPage")
+              $.mobile.navigate("#artistListPage");
+      }
+      
+      getCoverArtUrl = function(coverId, size) {
+          return loginData.ampacheUrl + "/rest/getCoverArt.view" + subSonicParams() + "&id=" + coverId + "&size=" + size + "x" + size;
+      }
+      
+      tryLogin = function() {
+          checkCodecSupport();
+          
+          $.getJSON(loginData.ampacheUrl + "/rest/ping.view" + subSonicParams(), function(data) {
+              console.log("Getting indexes");
+              if( $("#rememberLoginField").is(":checked") )
+                $.cookie("loginData", loginData, {expires:365});
+              else
+                $.cookie("loginData", loginData);
+              
+              var resp = data["subsonic-response"];
+              
+              if(resp == null || resp.status != "ok") {
+                  var msg = "Failed to login to ampache!";
+                  if(resp.error && resp.error.message) {
+                      msg += " " + resp.error.message;
+                  }
+                  
+                  $("#loginError").html(msg);
+                  $("#loginError").show(400);
+                  
+                  $.mobile.navigate("#loginPage");
+                  
+                  return;
+              }
+              
+              loadArtists();
+              
+              var scrollHandler =  function(e) {
+                  scrollData = e.data;
+                  var pos = scrollData.container.scrollLeft();
+                  var viewWidth = scrollData.container.width();
+                  var totalWidth = scrollData.list.width();
+                  
+                  if(pos < 50) {
+                      var opac = pos / 50;
+                          
+                      console.log("setting opacity to " + opac);
+                      scrollData.leftGradient.css("opacity", opac);
+                  }
+                  else
+                      scrollData.leftGradient.css("opacity", 1);
+                  
+                  if( (viewWidth + pos) >= (totalWidth - viewWidth) ) {
+                      if(!scrollData.isActiveLoading) {
+                         console.log("Scroll on " + scrollData.listType + " albums - " + (totalWidth - pos) + " <= " + (totalWidth - viewWidth) );
+                         writeAlbumListToDiv(scrollData); 
+                      }
+                  }
+              };
+
+              var x = ($(window).width() < $(window).height()) ? $(window).width() : $(window).height();
+              var initialItemWidth = x * 0.27;
+              $("div.gradientFadeOutLeft").height(initialItemWidth);
+              $("div.gradientFadeOutRight").height(initialItemWidth);
+              
+              /* random albums list  */
+              var scrollDataRandom = {
+                  container: $("#recommendedAlbumsContainer"),
+                  list: $("#recommendedAlbums"),
+                  leftGradient: $("#gradientLeftRecommended"),
+                  blockSize: 10,
+                  itemCount: 0,
+                  itemWidth: initialItemWidth,
+                  listType: "random",
+                  isActiveLoading: false
+              };
+              
+              writeAlbumListToDiv(scrollDataRandom);              
+              $("#recommendedAlbumsContainer").scroll(scrollDataRandom, scrollHandler);
+              
+              /* newest albums list  */
+              var scrollDataNewest  = {
+                  container: $("#newestAlbumsContainer"),
+                  list: $("#newestAlbums"),
+                  leftGradient: $("#gradientLeftNewest"),
+                  blockSize: 10,
+                  itemCount: 0,
+                  itemWidth: initialItemWidth,
+                  listType: "newest",
+                  isActiveLoading: false
+              };
+              
+              writeAlbumListToDiv(scrollDataNewest);              
+              $("#newestAlbumsContainer").scroll(scrollDataNewest, scrollHandler);
+
+              //writeAlbumListToDiv($("#newestAlbums"), "newest", 10);
+
+              console.log("Login successfull");
+              
+              if( location.hash == "" || location.hash == "#loginPage" ) {
+                 console.log("Navigating to main page");
+                 $.mobile.navigate("#mainPage");
+                 console.log("Navigation done");
+              }
+          }).fail( function() {
+                  $("#loginError").html("Failed to login to ampache! Communication error (check ampache url)!");
+                  $("#loginError").show(400);
+          });
+      }
+      
+      loadLoginData = function() {
+          var res = $.cookie("loginData");
+          if(res) {
+              loginData = JSON.parse(res);
+              
+              $("#ampacheUrlField").val(loginData.ampacheUrl);
+              $("#userNameField").val(loginData.userName);
+              $("#passwordField").val(loginData.password);
+          }
+      }        
+      
+      doLogin = function() {
+          loginData["ampacheUrl"] = $("#ampacheUrlField").val();
+          loginData["userName"]   = $("#userNameField").val();
+          loginData["password"]   = $("#passwordField").val();
+          
+          tryLogin();
+      }
+      
+      toHHMMSS = function (val) {
+        var sec_num = parseInt(val, 10); // don't forget the second param
+        var hours   = Math.floor(sec_num / 3600);
+        var minutes = Math.floor((sec_num - (hours * 3600)) / 60);
+        var seconds = sec_num - (hours * 3600) - (minutes * 60);
+
+        if (hours   < 10) {hours   = "0"+hours;}
+        if (minutes < 10) {minutes = "0"+minutes;}
+        if (seconds < 10) {seconds = "0"+seconds;}
+        var time    = "";
+        if(hours > 0)
+          time += hours+':';
+        time += minutes+':'+seconds;
+        return time;
+      }
+      
+      getSubDir = function(dirId) {
+          var albumProps = currentSubDirs[dirId];
+          if(!albumProps)
+              albumProps = prevSubDirs[dirId];
+          return albumProps;
+      }
+      
+      setAlbumPageHeader = function(albumProps) {
+          $("#albumNameHeader").html( albumProps["name"] );
+          $("#albumName").html( albumProps["name"] );
+          $("#albumArtist").html( albumProps["artist"] );
+
+          var tracksStr = albumProps["songCount"] + " Tracks";
+          var totalDurration = albumProps["duration"];
+          if(totalDurration) {
+              tracksStr += " - " + toHHMMSS(totalDurration);
+          }
+          
+          currentSubDirs[albumProps["id"]] = albumProps;
+          setAlbumForPopupMenu(albumProps["id"]);
+
+          $("#popupAlbumTitle").hide();
+          $("#albumPopupShowAlbum").show();
+          $("#albumTrackCnt").html( tracksStr );
+      }
+        
+      viewDirectory = function(dirId, forAlbum) {
+          console.info("Viewing directory: " + dirId);
+          
+          var headerFunc = function(albumProps) {
+              if(forAlbum)
+                  setAlbumPageHeader(albumProps);
+              else
+                $("#artistNameHeader").html( albumProps["name"] );
+          };
+          
+          if(forAlbum) {
+              var coverUrl = getCoverArtUrl(dirId, 192);
+              $("#albumCover").html( "<img src=\"" + coverUrl + "\" style=\"width: 100%;\" />" );
+          }
+          
+          var albumProps = getSubDir(dirId);
+          if(albumProps)
+              headerFunc(albumProps);
+          
+          var func = function(data) {
+              onDirectoryDataReceived(data, forAlbum);
+          };
+          
+          if(forAlbum)
+              $.getJSON(loginData.ampacheUrl + "/rest/getAlbum.view" + subSonicParams() + "&id=" + dirId, func);
+          else
+              $.getJSON(loginData.ampacheUrl + "/rest/getMusicDirectory.view" + subSonicParams() + "&id=" + dirId, func);
+      }
+      
+      checkCodecSupport = function() {
+          codecs = {
+              
+              supportsOggVorbis: function() {
+                  var val = this["audio/ogg; codecs=vorbis"];
+                  if(val == "probably")
+                      return true;
+                  return false;
+              },
+              
+              supportsOggOpus: function() {
+                  var val = this["audio/ogg; codecs=opus"];
+                  if(val == "probably")
+                      return true;
+                  return false;
+              },
+              
+              supportsMp3: function() {
+                  var val = this["audio/mpeg; codecs=mp3"];
+                  if(val == "probably")
+                      return true;
+                  return false;
+              },
+              
+              supportsMimeType: function(mimeType) {
+                  var val = this[mimeType];
+                  if(val === undefined) {
+                    var myAudioTest = new Audio("");
+                    this[mimeType] = myAudioTest.canPlayType(mimeType);
+                    val = this[mimeType];
+                  }
+          
+                  if(val == "maybe" || val == "probably")
+                      return true;
+                  else
+                      return false;              
+              }
+              
+          };
+          
+          var myAudioTest = new Audio("");
+          
+          var codecList = ["audio/ogg", "audio/ogg; codecs=vorbis", "audio/ogg; codecs=opus", "audio/mpeg", "audio/mpeg; codecs=mp3", "audio/webm", "audio/wave", "audio/mp4", "audio/x-flac"] 
+          
+          for(var idx in codecList)
+          {
+            var res = myAudioTest.canPlayType(codecList[idx]);
+            codecs[codecList[idx]] = res;
+          }
+      }
+      
+      writeAlbumListToDiv = function(scrollData) {
+          scrollData.isActiveLoading = true;
+          
+          $.getJSON(loginData.ampacheUrl + "/rest/getAlbumList.view" + subSonicParams() + "&type=" + scrollData.listType + "&size=" + scrollData.blockSize + "&offset=" + scrollData.itemCount, function(data) {
+              var albums = data["subsonic-response"].albumList.album;
+          
+              var handleAlbum = function(album) {
+                  var coverUrl = getCoverArtUrl(album.id, 192);
+                  var itm = $("<a>").attr("href", "#albumPage").attr("dirId", album.id).attr("onClick", "viewDirectory(" + album.id + ", true);").attr("class", "albumListItm albumLink");
+                  $("<img>").attr("src", coverUrl).attr("width", scrollData.itemWidth).attr("dirId", album.id).attr("height", scrollData.itemWidth).appendTo(itm);
+                  itm.appendTo(scrollData.list);
+                  scrollData.itemCount++;
+                  currentSubDirs[album.id] = album;
+              };
+              
+              if(albums.id === undefined) {
+                  for(var idx in albums) {
+                      handleAlbum(albums[idx]);
+                  }
+              } else
+                  handleAlbum(albums);
+              
+              //scrollData.list.width("calc(27vw * " + scrollData.itemCount + ")");
+              
+              // Workarround for android buildin browser
+              //if(scrollData.list.width() <= winWidth)
+                 scrollData.list.width(scrollData.itemWidth * scrollData.itemCount);
+              
+              scrollData.isActiveLoading = false;
+          }); // TODO: reset isActiveLoading to false on error 
+      }
+      
+      clearPlaylist = function() {
+          myPlaylist.removeAll();
+          $("#playlistPopup").popup("close");
+          onPlaylistChange();
+      }
+      
+      shufflePlaylist = function() {
+          myPlaylist.shuffle(true);
+          $("#playlistPopup").popup("close");
+          onPlaylistChange();
+      }
+      
+      playDirectory = function(dirId, playDirectly) {
+          $.getJSON(loginData.ampacheUrl + "/rest/getMusicDirectory.view" + subSonicParams() + "&id=" + dirId, function(data) {
+              var childs = data["subsonic-response"].directory.child;
+              
+              if(playDirectly)
+                myPlaylist.removeAll()
+
+              var handleChild = function(itm, playIfPaused) {
+                  if(itm.isDir)
+                     return; // recurrsion? (with strict ordering?)
+                  
+                  currentDirFiles[itm.id] = itm;
+                  addFileToPlaylist(itm.id, playIfPaused);
+              };
+              
+              var playIfPaused = playDirectly;
+                        
+              if(childs.id === undefined) {
+                  for(var idx in childs) {
+                      handleChild(childs[idx], playIfPaused);
+                      playIfPaused = false;
+                  }
+              } else
+                  handleChild(childs);
+          });
+      }
+      
+      loadArtists = function() {
+          $.getJSON(loginData.ampacheUrl + "/rest/getIndexes.view" + subSonicParams(), function(data) {
+              console.log("Getting indexes");
+
+              var indexes = data["subsonic-response"].indexes.index;
+              
+              var idxView = $("#artistListView");
+              
+              var prevName = "";
+              var prevArtistListView;
+              
+              for(var idx in indexes) {
+                  var artists = indexes[idx].artist;
+                  var artistListView;
+                  
+                  if(indexes[idx].name == prevName) {
+                      artistListView = prevArtistListView;
+                  } else {
+                      var collapsibleDiv = $("<div data-role=\"collapsible\">");
+                      $("<h2>").html(indexes[idx].name).appendTo(collapsibleDiv);
+                      artistListView = $("<ul data-role=\"listview\">");
+                  }
+                  
+                  for(var i in artists) {
+                      artistLi(artists[i]).appendTo(artistListView);
+                  }
+
+                  artistListView.appendTo(collapsibleDiv);
+                  collapsibleDiv.appendTo(idxView);
+                  $(artistListView).listview();
+                  
+                  prevArtistListView = artistListView;
+                  prevName = indexes[idx].name;
+              }
+              
+              $("#artistListView").collapsibleset();
+              
+              /*
+              for(var idx in indexes) {
+                  var artists = indexes[idx].artist;
+                  $("#artistList").append("<li data-role=\"list-divider\">" + indexes[idx].name + "</li>");
+
+                  for(var i in artists) {
+                    $("#artistList").append("<li dirId=" + artists[i].id + "><a href=\"#artistPage\" data-transition=\"slide\" onClick=\"onDirectorySelected(" + artists[i].id + ", false);\">" + artists[i].name + "</a></li>");
+                  }
+              }
+              
+              
+              $("#artistList").listview("refresh");
+              */
+          });
+      }
+        
+      //if(location.hash != "")
+      myHashChange();
+        
+      if(loginData.userName == "")
+          loadLoginData();
+        
+      if(loginData.userName != "")
+          tryLogin();
+        
+      document.oncontextmenu = function() {return false};
+        
+      $("#current-cover :first-child").attr("style", "width: 100%;");
+        
+      $("#mainPagePopup").enhanceWithin().popup();
+      $("#artistListPopup").enhanceWithin().popup();
+      $("#albumPopup").enhanceWithin().popup();
+      $("#playlistPopup").enhanceWithin().popup();
+      $("#trackPopup").enhanceWithin().popup();
+        
+      $("#recommendedAlbums").on("taphold", "a.albumLink", albumContextMenuFunc);
+      $("#newestAlbums").on("taphold", "a.albumLink", albumContextMenuFunc);
+      $("#albumList").on("taphold", "a.albumLink", albumContextMenuFunc);
+        
+      $("#trackList").on("taphold", "a.albumTrack", trackContextMenuFunc);        
+        
+      $(document).on( "swiperight", function( e ) {
+        // Only handle "slide in" from screen border 
+        if(e.swipestart.coords[0] > 20)
+            return;
+          
+        $( "#mainPanel" ).panel( "open" );
+      });
+        
+      $("#sortable-playlist").enhanceWithin().listview();
+        
+      startLoadingView = function() {
+        var $this = $( this ),
+            theme = $this.jqmData( "theme" ) || $.mobile.loader.prototype.options.theme,
+            msgText = $this.jqmData( "msgtext" ) || $.mobile.loader.prototype.options.text,
+            textVisible = $this.jqmData( "textvisible" ) || $.mobile.loader.prototype.options.textVisible,
+            textonly = !!$this.jqmData( "textonly" );
+            html = $this.jqmData( "html" ) || "";
+        $.mobile.loading( "show", {
+                text: msgText,
+                textVisible: textVisible,
+                theme: theme,
+                textonly: textonly,
+                html: html
+        });
+      }
+          
+      stopLoadingView = function() {
+          $.mobile.loading( "hide" );
+      }
+        
+      $("#searchForm").submit( function(e) {
+          e.preventDefault();
+          
+          $("#searchResultList li").filter("[data-role!='list-divider']").remove();
+          
+          var query = $("#searchQuery").val()
+          if(query == "")
+              return;
+          
+          currentDirFiles = {};
+          console.info("Search query: " + $("#searchQuery").val() );
+          
+          startLoadingView();
+          
+          $.getJSON(loginData.ampacheUrl + "/rest/search3.view" + subSonicParams() + "&query=" + encodeURIComponent(query), function(data) {
+              var resp = data["subsonic-response"].searchResult3;
+
+              var addArtist = function(itm) {
+                  artistLi(itm).insertBefore($("#searchAlbumsDivider"));
+              }
+              var addAlbum = function(itm) {
+                  albumLi(itm).insertBefore($("#searchSongsDivider"));
+              }
+              var addSong = function(itm) {
+                  currentDirFiles[itm.id] = itm;
+                  songLi(itm).appendTo($("#searchResultList"));
+              }
+              
+              var adder = function(items, func) {
+                  if(!items)
+                      return;
+                  if(items.id === undefined) {
+                      for(var idx in items)
+                          func(items[idx]);
+                  }
+                  else
+                      func(items);
+              }
+              
+              adder(resp.artist, addArtist);
+              adder(resp.album, addAlbum);
+              adder(resp.song, addSong);
+              
+              $("#searchResultList").listview("refresh");
+              
+              $("#searchResults").css("visibility", "visible");
+
+              if(navigator.vibrate)
+                 navigator.vibrate(15);
+              
+              stopLoadingView();
+          });
+          
+      });
+
+      displayDown = false;
+        
+      /*
+      if(window.DeviceOrientationEvent) {
+          window.addEventListener('deviceorientation', function(event) {
+              var alpha = event.alpha;
+              var beta = event.beta;
+              var gamma = event.gamma;
+              // Do something
+
+              var newVal = false;
+
+              if( (beta < -173 || beta > 173) && (gamma > -3 && gamma < 3) )
+                  newVal = true;
+              else
+                  newVal = false;
+
+              if(displayDown != newVal) {
+                  if(newVal == true) {
+                      $("#codecSupportContainer").html("Display down (" + alpha + ")");
+                      $("#jquery_jplayer_1").jPlayer("pause");
+                  } else {
+                      $("#codecSupportContainer").html("Display up (" + alpha + ")");
+                      $("#jquery_jplayer_1").jPlayer("play"); // FIXME: Only if paused by this event type
+                  }
+
+                  displayDown = newVal;
+              }
+
+
+          }, false);
+      }
+      */
+        
+        /*
+      $(document).mousedown = function(e) {
+          //if(e.button == 2)
+            //  return false;
+          
+          return true;
+      };
+      */
+
+    });
+  </script>
+</head>
+ 
+<body onhashchange="myHashChange();">
+      
+    <div data-role="popup" id="albumPopup" data-theme="a">
+        <ul data-role="listview" data-inset="true" style="min-width:210px;">
+            <li data-role="list-divider" id="popupAlbumTitle">Album</li>
+            <li><a href="#artistPage" id="albumPopupShowAlbum">Show Artist</a></li>
+            <li data-icon="false"><a href="#" id="albumPopupPlayNow">Play now</a></li>
+            <li data-icon="false"><a href="#" id="albumPopupPlayLast">Play last</a></li>
+        </ul>
+    </div>
+      
+    <div data-role="popup" id="playlistPopup" data-theme="a">
+        <ul data-role="listview" data-inset="true" style="min-width:210px;">
+            <!--<li data-role="list-divider">Playlist</li>-->
+            <li data-icon="false"><a href="#" onClick="shufflePlaylist();">Shuffle Playlist</a></li>
+            <li data-icon="false"><a href="#" onClick="clearPlaylist();">Clear Playlist</a></li>
+        </ul>
+    </div>
+      
+    <div data-role="popup" id="trackPopup" data-theme="a">
+        <ul data-role="listview" data-inset="true" style="min-width:210px;">
+            <!--<li data-role="list-divider">Playlist</li>-->
+            <li data-icon="false"><a id="trackPopupPlayNow" href="#">Play now</a></li>
+            <li data-icon="false"><a id="trackPopupPlayNext" href="#">Play next</a></li>
+            <li data-icon="false"><a id="trackPopupPlayLast" href="#">Play last</a></li>
+        </ul>
+    </div>
+    
+<div class="jp-type-single" id="jp_page">
+      
+  <div id="loginPage" data-role="page">
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2>mAmpache - Login</h2>
+    </div><!-- /header -->
+      
+    <div role="main" class="ui-content" id="mainView">
+        
+        <div id="loginError" class="loginError"></div>
+        
+        <div data-role="fieldcontain">
+            <label for="ampacheUrlField">Ampache:</label>
+            <input type="text" name="ampacheUrlField" id="ampacheUrlField" value="/ampache"  />
+        </div>
+        
+        <div data-role="fieldcontain">
+            <label for="userNameField">User:</label>
+            <input type="text" name="userNameField" id="userNameField" value=""  />
+        </div>	
+        
+        <div data-role="fieldcontain">
+            <label for="passwordField">Password:</label>
+            <input type="password" name="passwordField" id="passwordField" value="" />
+        </div>	
+        
+        <div data-role="fieldcontain">
+            <label for="rememberLoginField">Remember login data</label>
+            <input type="checkbox" name="rememberLoginField" id="rememberLoginField" checked="checked" />
+        </div>	
+        
+        <a href="#" onClick="doLogin();" class="ui-btn">Login</a>
+        
+    </div><!-- /content -->
+  </div>
+      
+  <div id="dummyPlaceholderPage" data-role="page">
+      
+    <div id="footer1" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed">
+      <div id="jquery_jplayer_1" class="jp-jplayer"></div>
+      <div id="jp_container_1" class="jp-audio">
+        <div class="jp-type-single">
+            
+          <div class="jp-gui jp-interface">
+            <ul class="jp-controls">
+              <li class="current-track-info" onClick="viewPlaylist();">
+                  <span class="current-cover" id="current-cover"></span>
+              </li>
+              <li class="current-track-info-2" onClick="viewPlaylist();">
+                  <span class="current-title" id="current-title"></span>
+                  <span class="current-artist" id="current-artist"></span>
+              </li>
+              <li><a href="javascript:;" class="jp-previous" tabindex="1">previous</a></li>
+              <li class="jp-spacing"/>
+              <li><a href="javascript:;" class="jp-play" tabindex="1">play</a></li>
+              <li><a href="javascript:;" class="jp-pause" tabindex="1">pause</a></li>
+              <li class="jp-spacing"/>
+              <li><a href="javascript:;" class="jp-next" tabindex="1">next</a></li>
+            </ul>
+          </div>
+            
+          <!-- time-holder -->
+          <div id="ext-bar" style="display: none;">
+              <div id="progress-bar" class="jp-progress">
+                <div class="jp-seek-bar">
+                    <div class="jp-play-bar"></div>
+                </div>
+              </div>            
+              <div id="time-holder" class="jp-time-holder">
+                <div class="jp-current-time"></div>
+                <div class="jp-duration"></div>
+              </div>
+          </div>
+            
+          <!-- no-solution -->
+          <div class="jp-no-solution">
+            <span>Update Required</span>
+            To play the media you will need to either update your browser to a recent version or update your <a href="http://get.adobe.com/flashplayer/" target="_blank">Flash plugin</a>.
+          </div>
+            
+          <div class="trackAddedOverlay"  onClick="viewPlaylist();" id="trackAddedOverlay" addCnt=0>1 track added to playlist</div>
+        </div>
+      </div>
+    </div><!-- /footer -->
+      
+  </div>
+      
+  <div id="mainPage" data-role="page">
+
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2>mAmpache</h2>
+      <a href="#mainPanel" class="jqm-navmenu-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-bars ui-nodisc-icon ui-alt-icon ui-btn-left">Menu</a>
+      <a href="#mainPagePopup" data-rel="popup" class="jqm-search-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-plus ui-nodisc-icon ui-alt-icon ui-btn-right">Options</a>
+    </div><!-- /header -->
+            
+    <div data-role="popup" id="mainPagePopup" data-theme="a">
+        <ul data-role="listview" data-inset="true" style="min-width:210px;">
+            <li data-icon="refresh"><a href="#" onClick="reloadPage();">Reload</a></li>
+        </ul>
+    </div>
+      
+    <div class="jqm-navmenu-panel" data-role="panel" data-display="overlay" data-position-fixed="true" id="mainPanel">
+       <!-- panel content goes here -->
+        <ul class="jqm-list ui-alt-icon ui-nodisc-icon" data-role="listview">
+            <li data-icon="home"><a href="#mainPage" data-transition="slide">Home</a></li>
+            <li data-icon="user"><a href="#artistListPage" data-transition="slide">Artists</a></li>
+            <li data-icon="search"><a href="#searchPage" data-transition="slide">Search</a></li>
+            <li data-icon="bullets"><a href="#playlistPage" data-transition="slide">Playlist</a></li>
+        </ul>
+    </div><!-- /panel -->
+
+    <div role="main" class="ui-content" id="mainView">
+
+        <h2 class="mainPageHeadline">Recommended albums</h2>        
+        
+        <div class="gradientContainer">
+          <div id="gradientLeftRecommended" class="gradientFadeOutLeft"></div>
+          <div class="gradientFadeOutRight"></div>
+        </div>
+        
+        <div id="recommendedAlbumsContainer" class="mainPageContent">
+            <div id="recommendedAlbums" style="width: calc(27vw * 10); z-index: 50;"></div>
+        </div>
+        
+        <h2 class="mainPageHeadline">Newest albums</h2>
+            
+        <div class="gradientContainer">
+          <div id="gradientLeftNewest" class="gradientFadeOutLeft"></div>
+          <div class="gradientFadeOutRight"></div>
+        </div>
+            
+        <div id="newestAlbumsContainer" class="mainPageContent">
+            <div id="newestAlbums" style="width: calc(27vw * 10); z-index: 50;"></div>
+        </div>
+
+        <!--
+        <h2 class="mainPageHeadline">Codec support</h2>        
+        <div id="codecSupportContainer" class="mainPageContent">
+        </div>
+        -->
+
+    </div><!-- /content -->
+      
+    <div id="footerMain" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed"></div>
+  </div>
+      
+  <div id="artistListPage" data-role="page">
+
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2>Artists</h2>
+      <a href="#mainPanel" class="jqm-navmenu-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-bars ui-nodisc-icon ui-alt-icon ui-btn-left">Menu</a>
+      <a href="#artistListPopup" data-rel="popup" class="jqm-search-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-plus ui-nodisc-icon ui-alt-icon ui-btn-right">Options</a>
+    </div><!-- /header -->
+            
+    <div data-role="popup" id="artistListPopup" data-theme="a">
+        <ul data-role="listview" data-inset="true" style="min-width:210px;">
+            <li data-icon="refresh"><a href="#" onClick="reloadPage();">Reload</a></li>
+        </ul>
+    </div>
+
+    <div role="main" class="ui-content" id="mainView">
+        <div id="artistListView" data-role="collapsibleset" data-theme="a" data-inset="false"></div>
+        <!--         
+        <div id="artistView">
+            <ul data-role="listview" data-filter="true" id="artistList"></ul>
+        </div>
+        -->
+    </div><!-- /content -->
+      
+    <div id="footerArtistList" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed"></div>
+  </div>
+        
+  <div id="artistPage" data-role="page">
+      
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2 id="artistNameHeader">mAmpache</h2>
+      <a href="#mainPanel" class="jqm-navmenu-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-bars ui-nodisc-icon ui-alt-icon ui-btn-left">Menu</a>
+      <a href="#" class="jqm-search-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-plus ui-nodisc-icon ui-alt-icon ui-btn-right">Options</a>
+    </div><!-- /header -->
+
+    <div role="main" class="ui-content" id="artistView">
+        <div id="albumView">
+            <ul data-role="listview" id="albumList"></ul>
+        </div>
+    </div><!-- /content -->
+
+    <div id="footerArtist" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed"></div>
+  </div>
+        
+  <div id="albumPage" data-role="page">
+      
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2 id="albumNameHeader">mAmpache</h2>
+      <a href="#mainPanel" class="jqm-navmenu-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-bars ui-nodisc-icon ui-alt-icon ui-btn-left">Menu</a>
+      <a href="#albumPopup" data-rel="popup" class="jqm-search-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-plus ui-nodisc-icon ui-alt-icon ui-btn-right">Options</a>
+    </div><!-- /header -->
+
+    <div role="main" class="ui-content" id="albumView">
+        <div id="albumInfo" class="albumInfo">
+            <div id="albumCover" class="albumCover"></div>
+            <div id="albumData" class="albumData">
+                <div id="albumName" class="albumName">Album Name [1970]</div>
+                <div id="albumArtist" class="albumArtist">Artist Name</div>
+                <div id="albumTrackCnt" class="albumTrackCnt">XX Tracks</div>
+            </div>
+        </div>
+        <div id="trackView" class="trackView">
+            <ul data-role="listview" id="trackList"></ul>
+        </div>
+    </div><!-- /content -->
+
+    <div id="footerAlbum" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed"></div>
+  </div>
+        
+  <div id="searchPage" data-role="page">
+      
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2>Search</h2>
+      <a href="#mainPanel" class="jqm-navmenu-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-bars ui-nodisc-icon ui-alt-icon ui-btn-left">Menu</a>
+    </div><!-- /header -->
+
+    <div role="main" class="ui-content" id="searchView">
+        <div id="searchRequest" class="searchRequest">
+            <form id="searchForm" action="#">
+                <input type="search" name="searchQuery" id="searchQuery" value="" placeholder="Search" >
+            </form>
+        </div>
+        <div id="searchResults" class="searchResults">
+            <ul id="searchResultList" data-role="listview" data-inset="false" data-divider-theme="a">
+                <li id="searchArtistsDivider" data-role="list-divider">Artists</li>
+                <li id="searchAlbumsDivider" data-role="list-divider">Albums</li>
+                <li id="searchSongsDivider" data-role="list-divider">Songs</li>
+            </ul>
+        </div>
+    </div><!-- /content -->
+
+    <div id="footerSearch" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed"></div>
+  </div>
+        
+  <div id="playlistPage" data-role="page">
+      
+    <div data-role="header" class="jqm-header" data-tap-toggle=false data-position="fixed">
+      <h2>Playlist</h2>
+      <a href="#mainPanel" class="jqm-navmenu-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-bars ui-nodisc-icon ui-alt-icon ui-btn-left">Menu</a>
+      <a href="#playlistPopup" data-rel="popup" class="jqm-search-link ui-btn ui-btn-icon-notext ui-corner-all ui-icon-plus ui-nodisc-icon ui-alt-icon ui-btn-right">Options</a>
+    </div><!-- /header -->
+
+    <div role="main" class="ui-content">
+        <div class="jp-type-playlist">
+            <div id="playlistView" class="jp-playlist">
+               <ul id="sortable-playlist">
+                  <!-- The method Playlist.displayPlaylist() uses this unordered list -->
+                  <li></li>
+               </ul>
+            </div>
+        </div>
+    </div>
+
+    <div id="footerPlaylist" data-id="main-footer" data-role="footer" class="jqm-footer" data-tap-toggle=false data-position="fixed"></div>
+  </div>
+
+    
+</div>
+
+<!-- 
+-->
+
+</body>
+</html>
