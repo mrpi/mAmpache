@@ -535,7 +535,7 @@ div.jp-details li {
 	font-weight:bold;
 }
 div.jp-playlist li {
-	padding:5px 0 4px 0px;
+	padding:5px 0 4px 5px;
 	border-bottom:1px solid #eee;
     height:40px;
 }
@@ -634,7 +634,6 @@ div.jp-type-playlist div.jp-playlist li.jp-playlist-current {
 	//list-style-type:square;
 	//list-style-position:inside;
     list-style-position: initial;
-	padding-left:0px;
 }
 div.jp-type-playlist div.jp-playlist a {
 	color: #333;
